@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/shivam78775/sample-app",
+  "branch": "main",
+  "build": "dist"
+}
