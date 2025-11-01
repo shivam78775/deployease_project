@@ -7,17 +7,149 @@ import chalk from "chalk";
 import simpleGit from "simple-git";
 import readline from "readline";
 import inquirer from "inquirer";
+import { execSync } from "child_process";
 
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
 });
 
+/**
+ * Detect project type and return build configuration
+ */
+function detectProjectType() {
+  const cwd = process.cwd();
+  const packageJsonPath = path.join(cwd, "package.json");
+  const indexHtmlPath = path.join(cwd, "index.html");
+
+  // Check if package.json exists
+  if (fs.existsSync(packageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+      const deps = {
+        ...(packageJson.dependencies || {}),
+        ...(packageJson.devDependencies || {}),
+      };
+
+      // React (Create React App)
+      if (deps["react-scripts"]) {
+        return {
+          type: "react",
+          buildCmd: "npm run build",
+          deployDir: "build",
+          description: "React (Create React App) project",
+        };
+      }
+
+      // Next.js
+      if (deps["next"]) {
+        // Check if export script exists
+        const hasExportScript = packageJson.scripts && packageJson.scripts.export;
+        const buildCmd = hasExportScript 
+          ? "npm run build && npm run export"
+          : "npm run build";
+        
+        return {
+          type: "nextjs",
+          buildCmd,
+          deployDir: "out",
+          description: "Next.js project",
+        };
+      }
+
+      // Vite
+      if (deps["vite"]) {
+        return {
+          type: "vite",
+          buildCmd: "npm run build",
+          deployDir: "dist",
+          description: "Vite project",
+        };
+      }
+
+      // Vue
+      if (deps["vue"] || deps["@vue/cli-service"]) {
+        return {
+          type: "vue",
+          buildCmd: "npm run build",
+          deployDir: "dist",
+          description: "Vue project",
+        };
+      }
+
+      // Angular
+      if (deps["@angular/core"]) {
+        return {
+          type: "angular",
+          buildCmd: "npm run build",
+          deployDir: "dist",
+          description: "Angular project",
+        };
+      }
+
+      // Generic Node.js with build script
+      if (packageJson.scripts && packageJson.scripts.build) {
+        // Check for common output directories
+        const possibleDirs = ["dist", "build", "out", "public"];
+        const deployDir = possibleDirs.find((dir) =>
+          fs.existsSync(path.join(cwd, dir))
+        ) || "dist";
+
+        return {
+          type: "node",
+          buildCmd: "npm run build",
+          deployDir,
+          description: "Node.js project with build script",
+        };
+      }
+
+      // If package.json exists but no build script, fall through to static check
+    } catch (err) {
+      // If package.json parsing fails, continue to static check
+    }
+  }
+
+  // Simple Static HTML (index.html exists and no package.json)
+  if (!fs.existsSync(packageJsonPath) && fs.existsSync(indexHtmlPath)) {
+    return {
+      type: "static",
+      buildCmd: null,
+      deployDir: ".",
+      description: "Static HTML project",
+    };
+  }
+
+  // Default to static
+  return {
+    type: "static",
+    buildCmd: null,
+    deployDir: ".",
+    description: "Static project",
+  };
+}
+
 export default async function deploy() {
   console.log(chalk.cyanBright("\n🚀 Starting deployment...\n"));
-  const spinner = ora("Preparing deployment...").start();
+  const spinner = ora("Detecting project type...").start();
 
   try {
+    // Step 1: Detect project type
+    spinner.start("🔍 Detecting project type...");
+    const projectInfo = detectProjectType();
+    spinner.succeed(
+      `✅ Detected: ${chalk.cyan(projectInfo.description)} ${chalk.gray(`(${projectInfo.type})`)}`
+    );
+
+    console.log(
+      chalk.gray(`   📦 Build command: ${projectInfo.buildCmd || "None"}`)
+    );
+    console.log(
+      chalk.gray(`   📁 Deploy directory: ${chalk.cyan(projectInfo.deployDir)}`)
+    );
+    console.log();
+
+    // Step 2: Load config
+    spinner.start("📋 Loading configuration...");
     const configPath = path.resolve(".deployease.json");
     if (!fs.existsSync(configPath)) {
       spinner.fail("❌ No .deployease.json found!");
@@ -27,7 +159,23 @@ export default async function deploy() {
     }
 
     const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const { repo, owner, branch = "gh-pages", deployDir = ".", description, repoUrl } = config;
+    const { repo, owner, branch = "gh-pages", deployDir: configDeployDir = ".", description, repoUrl } = config;
+
+    // Use detected deployDir if different from config
+    let deployDir = projectInfo.deployDir;
+    if (configDeployDir !== projectInfo.deployDir) {
+      console.log(
+        chalk.yellow(
+          `⚠️  Deploy directory updated: ${configDeployDir} → ${deployDir}`
+        )
+      );
+      // Update config
+      config.deployDir = deployDir;
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      console.log(chalk.gray("   📝 Configuration updated.\n"));
+    }
+
+    spinner.succeed("✅ Configuration loaded");
 
     if (!repo || !owner) {
       spinner.fail("❌ Missing repo or owner in .deployease.json");
@@ -35,25 +183,49 @@ export default async function deploy() {
       return;
     }
 
-    // Ensure deployDir is defined and resolve to absolute path
-    if (!deployDir || typeof deployDir !== 'string') {
-      spinner.fail("❌ Invalid deployDir in .deployease.json");
-      rl.close();
-      return;
+    // Step 3: Build project if needed
+    if (projectInfo.buildCmd) {
+      spinner.start(`🔨 Building project: ${chalk.cyan(projectInfo.buildCmd)}...`);
+      try {
+        // Execute build command with shell support for compound commands (&&)
+        execSync(projectInfo.buildCmd, {
+          cwd: process.cwd(),
+          stdio: "inherit",
+          shell: true,
+          env: { ...process.env, NODE_ENV: "production" },
+        });
+        spinner.succeed(`✅ Build completed successfully!`);
+        console.log();
+      } catch (buildErr) {
+        spinner.fail("❌ Build failed!");
+        console.error(chalk.redBright(`\nBuild Error: ${buildErr.message}`));
+        if (buildErr.stderr) {
+          console.error(chalk.redBright(buildErr.stderr.toString()));
+        }
+        console.log(chalk.yellow("\n💡 Fix the build errors and try again."));
+        rl.close();
+        return;
+      }
+    } else {
+      console.log(chalk.gray("⏭️  No build step required for static projects.\n"));
     }
 
+    // Step 4: Verify deploy directory
+    spinner.start("📂 Verifying deploy directory...");
     const fullPath = path.resolve(process.cwd(), deployDir);
-    
-    // Normalize the path to handle Windows/Unix differences
     const normalizedPath = path.normalize(fullPath);
-    
+
     if (!fs.existsSync(normalizedPath)) {
-      spinner.fail(`❌ Directory '${deployDir}' (${normalizedPath}) not found.`);
+      spinner.fail(`❌ Directory '${deployDir}' not found after build.`);
+      console.log(
+        chalk.yellow(
+          `💡 Make sure your build process outputs to: ${chalk.cyan(deployDir)}`
+        )
+      );
       rl.close();
       return;
     }
 
-    // Verify it's a directory
     const stats = fs.statSync(normalizedPath);
     if (!stats.isDirectory()) {
       spinner.fail(`❌ '${deployDir}' is not a directory.`);
@@ -61,7 +233,11 @@ export default async function deploy() {
       return;
     }
 
-    // Get GitHub token for authentication
+    spinner.succeed(`✅ Deploy directory ready: ${chalk.cyan(normalizedPath)}`);
+    console.log();
+
+    // Step 5: Get GitHub token for authentication
+    spinner.start("🔐 Authenticating with GitHub...");
     let token = process.env.GITHUB_TOKEN;
     if (!token) {
       spinner.stop();
@@ -82,18 +258,20 @@ export default async function deploy() {
         rl.close();
         return;
       }
-      spinner.start("Continuing deployment...");
     }
+    spinner.succeed("✅ Authentication ready");
+    console.log();
 
-    spinner.text = `🚚 Deploying from: ${chalk.blue(normalizedPath)} to ${chalk.blue(branch)} branch...`;
+    // Step 6: Deploy to GitHub Pages
+    spinner.start(
+      `🚀 Deploying ${chalk.cyan(repo)} to ${chalk.cyan(branch)} branch...`
+    );
+    console.log(chalk.gray(`   📂 Source: ${normalizedPath}`));
+    console.log(chalk.gray(`   📦 Repository: ${owner}/${repo}`));
+    console.log();
 
     // Prepare repo URL with token for authentication
     const repoUrlWithToken = `https://${token}@github.com/${owner}/${repo}.git`;
-
-    // Debug: Log the path being used
-    console.log(chalk.gray(`📂 Deploy directory: ${normalizedPath}`));
-    console.log(chalk.gray(`📦 Repository: ${owner}/${repo}`));
-    console.log(chalk.gray(`🌿 Branch: ${branch}\n`));
 
     // Use git from the project root, not the deploy directory
     // We'll create a temporary git repo in a temp directory to avoid conflicts
