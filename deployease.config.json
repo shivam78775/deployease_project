@@ -1,4 +1,12 @@
 {
   "repoName": "deployease_project",
-  "repoUrl": "https://github.com/shivam78775/deployease_project.git"
+  "repoUrl": "https://github.com/shivam78775/deployease_project.git",
+  "deployDir": "dist",
+  "createdAt": "2025-11-01T06:48:03.539Z",
+  "features": [
+    "Automatic GitHub Pages deployment",
+    "Global accessibility",
+    "Auto branch creation (gh-pages)",
+    "Smart deploy directory detection"
+  ]
 }

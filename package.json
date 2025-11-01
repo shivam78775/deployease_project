@@ -2,13 +2,29 @@
   "name": "deployease",
   "version": "1.0.0",
   "type": "module",
-  "description": "CLI to auto-deploy static sites to GitHub Pages",
+  "description": "A CLI tool to auto-create GitHub repos and deploy static sites effortlessly.",
   "main": "bin/deployease.js",
   "bin": {
     "deployease": "bin/deployease.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shivam78775/deployease.git"
+  },
+  "homepage": "https://github.com/shivam78775/deployease#readme",
+  "keywords": [
+    "deploy",
+    "cli",
+    "github",
+    "automation",
+    "static",
+    "gh-pages"
+  ],
+  "author": "Shivam Singh Rathore <shivamrathore78775@gmail.com>",
+  "license": "MIT",
   "scripts": {
-    "start": "node bin/deployease.js"
+    "start": "node bin/deployease.js",
+    "link": "npm link"
   },
   "dependencies": {
     "@octokit/rest": "^20.1.2",
@@ -19,6 +35,7 @@
     "gh-pages": "^5.0.0",
     "inquirer": "^9.3.8",
     "node-fetch": "^3.0.0",
+    "octokit": "^5.0.4",
     "ora": "^6.0.0",
     "simple-git": "^3.29.0"
   }

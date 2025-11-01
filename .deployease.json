@@ -1,5 +1,7 @@
 {
-  "repo": "https://github.com/shivam78775/sample-app",
-  "branch": "main",
-  "build": "dist"
+  "repo": "deployease_project",
+  "owner": "shivam78775",
+  "branch": "gh-pages",
+  "deployDir": "dist",
+  "description": "Deployed using DeployEase 🚀"
 }
