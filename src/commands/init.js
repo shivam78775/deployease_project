@@ -72,6 +72,13 @@ export default async function init() {
     
     if (!repoName) {
       repoName = await ask("📦 Enter your GitHub repository name: ");
+      // Sanitize repo name (remove invalid characters for GitHub)
+      repoName = repoName.trim().replace(/[^a-zA-Z0-9._-]/g, '-');
+      if (!repoName) {
+        spinner.fail("❌ Invalid repository name.");
+        rl.close();
+        return;
+      }
       // Use authenticated user as owner (don't prompt for username)
       owner = authenticatedOwner;
       repoUrl = `https://github.com/${owner}/${repoName}.git`;
@@ -87,8 +94,8 @@ export default async function init() {
 
     spinner.start("🔧 Creating GitHub repository...");
 
-    // Create repository on GitHub
-    const repoInfo = await createGitHubRepo(repoName, token, "Deployed using DeployEase 🚀");
+    // Create repository on GitHub (remove emojis from description for API compatibility)
+    const repoInfo = await createGitHubRepo(repoName, token, "Deployed using DeployEase");
     if (!repoInfo) {
       spinner.fail("❌ Failed to create or access GitHub repository.");
       rl.close();
@@ -157,7 +164,7 @@ export default async function init() {
       owner,
       branch: "gh-pages",
       deployDir,
-      description: "Deployed using DeployEase 🚀",
+      description: "Deployed using DeployEase",
       repoUrl: cleanRepoUrl,
     };
 

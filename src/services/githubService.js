@@ -15,10 +15,17 @@ export async function createGitHubRepo(repoName, token, description = "") {
     console.log(chalk.cyan(`\n🔧 Creating GitHub repository: ${repoName} ...`));
 
     try {
+      // Sanitize description to remove emojis and ensure it's valid ASCII
+      const sanitizedDescription = description
+        ? description.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emojis
+          .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII characters
+          .trim() || "Deployed using DeployEase"
+        : "Deployed using DeployEase";
+
       const response = await octokit.repos.createForAuthenticatedUser({
         name: repoName,
         private: false,
-        description,
+        description: sanitizedDescription,
       });
 
       console.log(chalk.green(`✅ Repository created: ${response.data.html_url}`));

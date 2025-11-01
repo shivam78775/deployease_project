@@ -8,6 +8,7 @@ import simpleGit from "simple-git";
 import readline from "readline";
 import inquirer from "inquirer";
 import { execSync } from "child_process";
+import { analyzeCode } from "./check.js";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -133,6 +134,56 @@ export default async function deploy() {
   const spinner = ora("Detecting project type...").start();
 
   try {
+    // Step 0: Quick security check (optional - can be skipped)
+    spinner.stop();
+    const runCheck = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "check",
+        message: "Run security check before deploying?",
+        default: true,
+      },
+    ]);
+
+    if (runCheck.check) {
+      spinner.start("🔍 Running pre-deployment checks...");
+      const cwd = process.cwd();
+      const analysis = analyzeCode(cwd);
+
+      if (analysis.issues.length > 0) {
+        spinner.warn(`⚠️  Found ${analysis.issues.length} critical issue(s)`);
+        console.log(chalk.yellow("\n⚠️  Critical issues detected before deployment:\n"));
+        analysis.issues.slice(0, 3).forEach((issue) => {
+          console.log(chalk.red(`   • ${issue.message}`));
+          console.log(chalk.gray(`     Solution: ${issue.solution}`));
+        });
+        if (analysis.issues.length > 3) {
+          console.log(chalk.gray(`   ... and ${analysis.issues.length - 3} more issues`));
+        }
+        console.log();
+
+        const continueDeploy = await inquirer.prompt([
+          {
+            type: "confirm",
+            name: "continue",
+            message: "Continue with deployment anyway?",
+            default: false,
+          },
+        ]);
+
+        if (!continueDeploy.continue) {
+          console.log(chalk.yellow("\n💡 Run 'deployease check' for detailed analysis\n"));
+          rl.close();
+          return;
+        }
+      } else {
+        spinner.succeed("✅ Security check passed!");
+      }
+      console.log();
+    }
+
+    spinner.start("Detecting project type...");
+
     // Step 1: Detect project type
     spinner.start("🔍 Detecting project type...");
     const projectInfo = detectProjectType();
@@ -173,6 +224,26 @@ export default async function deploy() {
       config.deployDir = deployDir;
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
       console.log(chalk.gray("   📝 Configuration updated.\n"));
+    }
+
+    // For React apps, ensure homepage is set in package.json
+    if (projectInfo.type === "react") {
+      const packageJsonPath = path.join(process.cwd(), "package.json");
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+        const expectedHomepage = `https://${owner}.github.io/${repo}`;
+        
+        if (!packageJson.homepage || packageJson.homepage !== expectedHomepage) {
+          spinner.stop();
+          console.log(chalk.yellow("\n⚠️  React apps need 'homepage' field for GitHub Pages"));
+          console.log(chalk.gray(`   Setting homepage to: ${expectedHomepage}`));
+          
+          packageJson.homepage = expectedHomepage;
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2));
+          console.log(chalk.green("   ✓ Updated package.json\n"));
+          spinner.start();
+        }
+      }
     }
 
     spinner.succeed("✅ Configuration loaded");
@@ -233,7 +304,31 @@ export default async function deploy() {
       return;
     }
 
+    // Verify index.html exists in deploy directory (required for GitHub Pages)
+    const indexHtmlPath = path.join(normalizedPath, "index.html");
+    if (!fs.existsSync(indexHtmlPath)) {
+      spinner.fail(`❌ index.html not found in '${deployDir}' directory.`);
+      console.log(
+        chalk.yellow(
+          `💡 GitHub Pages requires an index.html file at the root of the deployment.`
+        )
+      );
+      console.log(chalk.gray(`   Checked: ${indexHtmlPath}`));
+      
+      // List what files are in the directory
+      try {
+        const files = fs.readdirSync(normalizedPath);
+        console.log(chalk.gray(`   Files found: ${files.slice(0, 10).join(", ")}${files.length > 10 ? "..." : ""}`));
+      } catch (e) {
+        // Ignore
+      }
+      
+      rl.close();
+      return;
+    }
+
     spinner.succeed(`✅ Deploy directory ready: ${chalk.cyan(normalizedPath)}`);
+    console.log(chalk.gray(`   ✓ index.html found`));
     console.log();
 
     // Step 5: Get GitHub token for authentication
@@ -280,14 +375,51 @@ export default async function deploy() {
     spinner.text = `📦 Preparing deployment files...`;
     
     // Create temp directory and copy files
+    // IMPORTANT: Copy contents of normalizedPath to tempDir (not the directory itself)
     await fsExtra.ensureDir(tempDir);
-    await fsExtra.copy(normalizedPath, tempDir, {
-      filter: (src) => {
-        // Don't copy .git directories or node_modules
-        const relativePath = path.relative(normalizedPath, src);
-        return !relativePath.includes('.git') && !relativePath.includes('node_modules');
+    
+    // Read all files in the deploy directory
+    const files = fs.readdirSync(normalizedPath);
+    
+    // Copy each file/directory individually to avoid copying the parent directory
+    for (const file of files) {
+      const srcPath = path.join(normalizedPath, file);
+      const destPath = path.join(tempDir, file);
+      const fileStats = fs.statSync(srcPath);
+      
+      // Skip .git directories and node_modules
+      if (file === '.git' || file === 'node_modules') {
+        continue;
       }
-    });
+      
+      if (fileStats.isDirectory()) {
+        await fsExtra.copy(srcPath, destPath, {
+          filter: (src) => {
+            // Don't copy .git directories or node_modules
+            return !src.includes('.git') && !src.includes('node_modules');
+          }
+        });
+      } else {
+        await fsExtra.copy(srcPath, destPath);
+      }
+    }
+    
+    // Verify index.html was copied
+    const tempIndexHtml = path.join(tempDir, "index.html");
+    if (!fs.existsSync(tempIndexHtml)) {
+      spinner.fail("❌ Failed to copy index.html to deployment directory.");
+      console.log(chalk.red(`   Expected: ${tempIndexHtml}`));
+      try {
+        const tempFiles = fs.readdirSync(tempDir);
+        console.log(chalk.gray(`   Files in temp dir: ${tempFiles.join(", ")}`));
+      } catch (e) {
+        // Ignore
+      }
+      rl.close();
+      return;
+    }
+    
+    spinner.text = `📦 Files ready (${files.length} items)`;
     
     // Initialize git in temp directory
     const git = simpleGit(tempDir);
@@ -305,10 +437,64 @@ export default async function deploy() {
     await git.addRemote('origin', repoUrlWithToken);
 
     // Add all files and commit
-    await git.add('.');
+    spinner.text = `📝 Committing files...`;
+    
+    // List files in temp directory for debugging
+    const tempFiles = fs.readdirSync(tempDir);
+    console.log(chalk.gray(`   Files to deploy: ${tempFiles.slice(0, 10).join(", ")}${tempFiles.length > 10 ? ` (+${tempFiles.length - 10} more)` : ""}`));
+    
+    // Force add all files (including ignored ones for deployment)
+    await git.raw(['add', '-A', '-f', '.']);
+    
+    // Check what files are being committed
+    const statusBefore = await git.status();
+    
+    // Count all tracked and untracked files
+    const totalFiles = statusBefore.files.length + 
+                       statusBefore.not_added.length + 
+                       statusBefore.created.length +
+                       statusBefore.deleted.length +
+                       statusBefore.modified.length;
+    
+    if (totalFiles === 0) {
+      spinner.warn("⚠️  No files detected by git!");
+      console.log(chalk.yellow("   This might indicate a problem with file copying."));
+      console.log(chalk.gray(`   Files in temp dir: ${tempFiles.length}`));
+      
+      // Try listing with ls-files
+      try {
+        const lsFiles = await git.raw(['ls-files']);
+        console.log(chalk.gray(`   Git tracked files: ${lsFiles ? "some" : "none"}`));
+      } catch (e) {
+        // Ignore
+      }
+      
+      // Still try to commit if files exist
+      if (tempFiles.length > 0) {
+        console.log(chalk.yellow("   Attempting to commit anyway..."));
+      } else {
+        rl.close();
+        return;
+      }
+    } else {
+      console.log(chalk.gray(`   Staged ${totalFiles} files for commit...`));
+    }
+    
     await git.commit(description || "🚀 Auto-deployed using DeployEase");
+    
+    // Verify commit was created
+    const log = await git.log(['-1']);
+    if (log.total === 0) {
+      spinner.fail("❌ Failed to create commit!");
+      rl.close();
+      return;
+    }
+    
+    console.log(chalk.gray(`   ✓ Commit created: ${log.latest.hash.substring(0, 7)}`));
+    console.log(chalk.gray(`   ✓ Message: ${log.latest.message}`));
 
     // Push to gh-pages branch (create if doesn't exist)
+    spinner.text = `🚀 Pushing to ${chalk.cyan(branch)} branch...`;
     try {
       await git.push('origin', `HEAD:${branch}`, ['--force']);
     } catch (pushErr) {
@@ -321,7 +507,8 @@ export default async function deploy() {
     await fsExtra.remove(tempDir).catch(() => {});
 
     spinner.succeed(`✅ Successfully deployed ${chalk.yellow(repo)} to GitHub Pages!`);
-    console.log(chalk.greenBright(`\n🌍 Visit: https://${owner}.github.io/${repo}/\n`));
+    console.log(chalk.greenBright(`\n🌍 Visit: https://${owner}.github.io/${repo}/`));
+    console.log(chalk.gray(`   Note: It may take a few minutes for GitHub Pages to update.\n`));
     rl.close();
   } catch (err) {
     spinner.fail("❌ Deployment failed.");
