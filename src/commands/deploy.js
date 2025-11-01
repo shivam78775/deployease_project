@@ -9,6 +9,7 @@ import readline from "readline";
 import inquirer from "inquirer";
 import { execSync } from "child_process";
 import { analyzeCode } from "./check.js";
+import { getGitHubToken } from "../utils/auth.js";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -332,27 +333,13 @@ export default async function deploy() {
     console.log();
 
     // Step 5: Get GitHub token for authentication
-    spinner.start("🔐 Authenticating with GitHub...");
-    let token = process.env.GITHUB_TOKEN;
+    spinner.start("🔐 Authenticating...");
+    let token = await getGitHubToken();
     if (!token) {
-      spinner.stop();
-      console.log(chalk.yellow("\n⚠️  GitHub token not found in environment."));
-      console.log(chalk.gray("   Create a token at: https://github.com/settings/tokens"));
-      console.log(chalk.gray("   Required permissions: repo, workflow\n"));
-      const tokenPrompt = await inquirer.prompt([
-        {
-          type: "password",
-          name: "token",
-          message: "🔑 Enter your GitHub Personal Access Token:",
-          mask: "*",
-        },
-      ]);
-      token = tokenPrompt.token;
-      if (!token) {
-        spinner.fail("❌ GitHub token is required for deployment.");
-        rl.close();
-        return;
-      }
+      spinner.fail("❌ Authentication required.");
+      console.log(chalk.yellow("💡 Run 'deployease login' to authenticate.\n"));
+      rl.close();
+      return;
     }
     spinner.succeed("✅ Authentication ready");
     console.log();

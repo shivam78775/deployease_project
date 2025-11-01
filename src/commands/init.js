@@ -6,6 +6,7 @@ import readline from "readline";
 import inquirer from "inquirer";
 import simpleGit from "simple-git";
 import { createGitHubRepo, initLocalRepo } from "../services/githubService.js";
+import { getGitHubToken } from "../utils/auth.js";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -39,29 +40,16 @@ export default async function init() {
 
     spinner.succeed("✅ Git repository checked.");
 
-    // Get GitHub token for API operations
-    token = process.env.GITHUB_TOKEN;
+    // Get GitHub token (from stored auth, env, or prompt)
+    spinner.start("🔐 Authenticating...");
+    token = await getGitHubToken();
     if (!token) {
-      spinner.stop();
-      console.log(chalk.yellow("\n⚠️  GitHub token not found in environment."));
-      console.log(chalk.gray("   Create a token at: https://github.com/settings/tokens"));
-      console.log(chalk.gray("   Required permissions: repo, workflow\n"));
-      const tokenPrompt = await inquirer.prompt([
-        {
-          type: "password",
-          name: "token",
-          message: "🔑 Enter your GitHub Personal Access Token:",
-          mask: "*",
-        },
-      ]);
-      token = tokenPrompt.token;
-      if (!token) {
-        spinner.fail("❌ GitHub token is required.");
-        rl.close();
-        return;
-      }
-      spinner.start();
+      spinner.fail("❌ Authentication required.");
+      console.log(chalk.yellow("💡 Run 'deployease login' to authenticate.\n"));
+      rl.close();
+      return;
     }
+    spinner.succeed("✅ Authenticated");
 
     // Get repository info
     // First, get authenticated user to know the owner

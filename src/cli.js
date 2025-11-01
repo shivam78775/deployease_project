@@ -4,6 +4,8 @@ import deploy from "./commands/deploy.js";
 import redeploy from "./commands/redeploy.js";
 import check from "./commands/check.js";
 import readme from "./commands/readme.js";
+import login from "./commands/login.js";
+import logout from "./commands/logout.js";
 
 const program = new Command();
 
@@ -36,5 +38,15 @@ program
   .command("readme")
   .description("Generate README.md file with AI assistance")
   .action(readme);
+
+program
+  .command("login")
+  .description("Login to GitHub and save authentication")
+  .action(login);
+
+program
+  .command("logout")
+  .description("Logout and remove stored authentication")
+  .action(logout);
 
 program.parse(process.argv);
