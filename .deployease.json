@@ -1,0 +1,8 @@
+{
+  "repo": "deployease_project",
+  "owner": "shivam78775",
+  "branch": "gh-pages",
+  "deployDir": ".",
+  "description": "Deployed using DeployEase 🚀",
+  "repoUrl": "https://github.com/shivam78775/deployease_project.git"
+}

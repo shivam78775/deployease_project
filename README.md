@@ -1,0 +1,1 @@
+# DeployEase\nA CLI to auto-deploy static sites to GitHub Pages.
