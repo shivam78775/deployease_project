@@ -8,8 +8,13 @@ import simpleGit from "simple-git";
 import readline from "readline";
 import inquirer from "inquirer";
 import { execSync } from "child_process";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { analyzeCode } from "./check.js";
 import { getGitHubToken } from "../utils/auth.js";
+import AutoFixEngine from "../services/autoFixEngine.js";
+
+const execAsync = promisify(exec);
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -128,6 +133,184 @@ function detectProjectType() {
     deployDir: ".",
     description: "Static project",
   };
+}
+
+/**
+ * Store build error for chat assistant
+ */
+function storeBuildError(errorOutput) {
+  if (errorOutput && errorOutput.length > 0) {
+    try {
+      const errorLogPath = path.join(process.cwd(), ".deployease-build-error.log");
+      fs.writeFileSync(errorLogPath, errorOutput, "utf-8");
+    } catch (e) {
+      // Ignore if can't write error log
+    }
+  }
+}
+
+/**
+ * Build project with AI auto-fix engine
+ */
+async function buildWithAutoFix(spinner, projectInfo, config) {
+  const maxRetries = 2;
+  let attempt = 0;
+  let buildSuccess = false;
+
+  while (attempt <= maxRetries && !buildSuccess) {
+    if (attempt > 0) {
+      spinner.start(`🔄 Retrying build (attempt ${attempt + 1}/${maxRetries + 1})...`);
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // Brief pause
+    } else {
+      spinner.start(`🔨 Building project: ${chalk.cyan(projectInfo.buildCmd)}...`);
+    }
+
+    try {
+      // Capture both stdout and stderr for error analysis
+      try {
+        const { stdout, stderr } = await execAsync(projectInfo.buildCmd, {
+          cwd: process.cwd(),
+          shell: true,
+          env: { ...process.env, NODE_ENV: "production" },
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        });
+
+        // Show output
+        if (stdout) process.stdout.write(stdout);
+        if (stderr && attempt === 0) process.stderr.write(stderr);
+
+        spinner.succeed(`✅ Build completed successfully!`);
+        console.log();
+        buildSuccess = true;
+      } catch (execErr) {
+        // Re-throw to be caught by outer catch block
+        throw {
+          ...execErr,
+          stderr: execErr.stderr || "",
+          stdout: execErr.stdout || "",
+          message: execErr.message || "Build failed",
+        };
+      }
+    } catch (buildErr) {
+      attempt++;
+      const errorOutput = (buildErr.stderr || buildErr.stdout || buildErr.message || "").toString();
+      
+      // Store error for chat assistant
+      storeBuildError(errorOutput);
+      
+      // Show error output
+      if (errorOutput) {
+        spinner.fail("❌ Build failed!");
+        console.error(chalk.redBright(`\n${errorOutput.substring(0, 2000)}`)); // Limit output to 2000 chars
+        if (errorOutput.length > 2000) {
+          console.log(chalk.gray("   ... (output truncated)"));
+        }
+      } else {
+        spinner.fail("❌ Build failed!");
+      }
+
+      // Only run auto-fix engine on first attempt
+      if (attempt === 1) {
+        spinner.stop();
+        console.log(chalk.yellow("\n🤖 AI Auto-Fix Engine analyzing error...\n"));
+
+        // Initialize auto-fix engine
+        const autoFix = new AutoFixEngine(process.cwd(), projectInfo);
+        const analysis = autoFix.analyzeError(buildErr, errorOutput);
+
+        if (analysis.issues.length > 0) {
+          console.log(chalk.cyan("📋 Detected Issues:\n"));
+          analysis.issues.forEach((issue, idx) => {
+            console.log(chalk.red(`   ${idx + 1}. ${issue.message}`));
+          });
+
+          if (analysis.suggestedFixes.length > 0) {
+            console.log(chalk.cyan("\n💡 Suggested Fixes:\n"));
+            analysis.suggestedFixes.forEach((fix, idx) => {
+              const autoFixBadge = fix.autoFixable ? chalk.green(" [Auto-fixable]") : chalk.gray(" [Manual]");
+              console.log(chalk.yellow(`   ${idx + 1}. ${fix.description}${autoFixBadge}`));
+              console.log(chalk.gray(`      Action: ${fix.action}`));
+            });
+
+            // Check if any fixes can be applied automatically
+            const autoFixableFixes = analysis.suggestedFixes.filter((f) => f.autoFixable);
+            
+            if (autoFixableFixes.length > 0) {
+              console.log();
+              const shouldAutoFix = await inquirer.prompt([
+                {
+                  type: "confirm",
+                  name: "apply",
+                  message: chalk.cyan(
+                    `Would you like me to automatically apply ${autoFixableFixes.length} fix(es) and retry?`
+                  ),
+                  default: true,
+                },
+              ]);
+
+              if (shouldAutoFix.apply) {
+                console.log();
+                spinner.start("🔧 Applying fixes...");
+
+                let fixesApplied = 0;
+                for (const fix of autoFixableFixes) {
+                  const success = await autoFix.applyFix(fix);
+                  if (success) fixesApplied++;
+                }
+
+                if (fixesApplied > 0) {
+                  spinner.succeed(`✅ Applied ${fixesApplied} fix(es)`);
+                  console.log();
+                  
+                  // Handle memory increase fix specially
+                  const memoryFix = autoFixableFixes.find((f) => f.type === "increase_memory");
+                  if (memoryFix) {
+                    projectInfo.buildCmd = memoryFix.action;
+                    console.log(chalk.gray(`   Using: ${projectInfo.buildCmd}\n`));
+                  }
+
+                  // Continue to retry build
+                  continue;
+                } else {
+                  spinner.fail("❌ Failed to apply fixes");
+                  console.log();
+                }
+              } else {
+                console.log(chalk.yellow("\n💡 Fix the build errors manually and try again.\n"));
+                rl.close();
+                return;
+              }
+            } else {
+              console.log(chalk.yellow("\n💡 These fixes require manual intervention. Please fix the errors and try again.\n"));
+              rl.close();
+              return;
+            }
+          } else {
+            console.log(chalk.yellow("\n💡 Unable to suggest automatic fixes. Please check the error output above.\n"));
+            rl.close();
+            return;
+          }
+        } else {
+          console.log(chalk.yellow("\n💡 Unable to detect specific issues. Please check the error output above.\n"));
+          rl.close();
+          return;
+        }
+      } else {
+        // Second attempt also failed
+        spinner.fail("❌ Build failed after applying fixes!");
+        console.log(chalk.yellow("\n💡 The automatic fixes did not resolve the issue."));
+        console.log(chalk.yellow("   Please review the error output and fix manually.\n"));
+        rl.close();
+        return;
+      }
+    }
+  }
+
+  if (!buildSuccess) {
+    spinner.fail("❌ Build failed after multiple attempts");
+    rl.close();
+    return;
+  }
 }
 
 export default async function deploy() {
@@ -257,27 +440,7 @@ export default async function deploy() {
 
     // Step 3: Build project if needed
     if (projectInfo.buildCmd) {
-      spinner.start(`🔨 Building project: ${chalk.cyan(projectInfo.buildCmd)}...`);
-      try {
-        // Execute build command with shell support for compound commands (&&)
-        execSync(projectInfo.buildCmd, {
-          cwd: process.cwd(),
-          stdio: "inherit",
-          shell: true,
-          env: { ...process.env, NODE_ENV: "production" },
-        });
-        spinner.succeed(`✅ Build completed successfully!`);
-        console.log();
-      } catch (buildErr) {
-        spinner.fail("❌ Build failed!");
-        console.error(chalk.redBright(`\nBuild Error: ${buildErr.message}`));
-        if (buildErr.stderr) {
-          console.error(chalk.redBright(buildErr.stderr.toString()));
-        }
-        console.log(chalk.yellow("\n💡 Fix the build errors and try again."));
-        rl.close();
-        return;
-      }
+      await buildWithAutoFix(spinner, projectInfo, config);
     } else {
       console.log(chalk.gray("⏭️  No build step required for static projects.\n"));
     }

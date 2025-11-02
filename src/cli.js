@@ -6,6 +6,7 @@ import check from "./commands/check.js";
 import readme from "./commands/readme.js";
 import login from "./commands/login.js";
 import logout from "./commands/logout.js";
+import chat from "./commands/chat.js";
 
 const program = new Command();
 
@@ -48,5 +49,11 @@ program
   .command("logout")
   .description("Logout and remove stored authentication")
   .action(logout);
+
+program
+  .command("chat")
+  .description("Chat-based developer assistant - Ask questions about build failures, routing, 404 errors, etc.")
+  .alias("ask")
+  .action(chat);
 
 program.parse(process.argv);

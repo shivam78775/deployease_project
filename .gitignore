@@ -37,4 +37,5 @@ Thumbs.db
 # DeployEase
 .deployease.json
 deployease.config.json
+.deployease-build-error.log
 
