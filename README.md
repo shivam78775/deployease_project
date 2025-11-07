@@ -14,15 +14,6 @@
 
 ---
 
-## 👨‍💻 **Team Members**
-**1. Ayan Ali**
-**2. Shivam Singh Rathore**
-**3. Karanpal Singh**
-**4. Lalit Kumar**
-**5. Akash Singh Shekhawat**
-
----
-
 ## 💡 **Project Overview**
 
 **DeployEase** is an open-source **Command Line Interface (CLI) tool** designed to automate the **entire website deployment process**.  
